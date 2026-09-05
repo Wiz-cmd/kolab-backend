@@ -55,3 +55,56 @@ jobs:
         run: |
           npx prisma migrate deploy
           npx prisma db seed || echo "seed skipped (optional)"
+
+      - name: Boot API and run contract smoke test (register → login → me)
+        env:
+          PORT: 3000
+          APP_BASE_URL: http://localhost:3000
+          CORS_ORIGINS: "*"
+          JWT_ACCESS_EXPIRES_IN: 1h
+          SWAGGER_ENABLED: "true"
+          TRUST_PROXY: "0"
+          LOG_STRUCTURED: "false"
+          IMAGE_PROCESSING: "false"
+          UPLOAD_DIR: /tmp/kolab-uploads
+          RATE_LIMIT_MAX: 1000
+          RATE_LIMIT_WINDOW_MS: 60000
+          AUTH_RATE_LIMIT_MAX: 100
+          AUTH_RATE_LIMIT_WINDOW_MS: 60000
+        run: |
+          mkdir -p /tmp/kolab-uploads
+          node dist/src/main.js > /tmp/kolab-api.log 2>&1 &
+          API_PID=$!
+          trap "kill $API_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:3000/api/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          echo "--- health ---"
+          curl -fsS http://localhost:3000/api/health && echo
+          echo "--- register ---"
+          REG=$(curl -fsS -X POST http://localhost:3000/api/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci.smoke@kolab.co.za","password":"CiPass123!","name":"CI Smoke Tester","role":"CREATOR"}')
+          echo "$REG"
+          echo "$REG" | grep -q '"accessToken"' || { echo "register response missing accessToken"; exit 1; }
+          echo "--- login ---"
+          LOGIN=$(curl -fsS -X POST http://localhost:3000/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci.smoke@kolab.co.za","password":"CiPass123!"}')
+          echo "$LOGIN"
+          TOKEN=$(echo "$LOGIN" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).accessToken))")
+          test -n "$TOKEN"
+          echo "--- me ---"
+          curl -fsS http://localhost:3000/api/users/me -H "Authorization: Bearer $TOKEN" && echo
+          echo "--- verify-email token path ---"
+          VT=$(echo "$REG" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);console.log(j.emailVerificationToken||'')})")
+          if [ -n "$VT" ]; then
+            curl -fsS -X POST http://localhost:3000/api/auth/verify-email \
+              -H "Authorization: Bearer $(echo "$REG" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).accessToken))")" \
+              -H 'Content-Type: application/json' \
+              -d "{\"token\":\"$VT\"}" && echo
+          fi
+          echo "--- swagger ---"
+          curl -fsS -o /dev/null -w 'docs http:%{http_code}\n' http://localhost:3000/api/docs
+          echo "CONTRACT SMOKE PASSED"

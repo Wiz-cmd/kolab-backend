@@ -1,0 +1,44 @@
+# Render Blueprint — deploy Kolab API + managed Postgres in one click.
+# Use: Render dashboard -> New + -> Blueprint -> connect this repo.
+# After deploy, the API is at https://kolab-api.onrender.com  (edit in env APP_BASE_URL if you rename it).
+
+services:
+  - type: web
+    name: kolab-api
+    runtime: docker
+    plan: free
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_BASE_URL
+        value: https://kolab-api.onrender.com
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 1h
+      - key: JWT_EXPIRES_IN
+        value: 1h
+      - key: SWAGGER_ENABLED
+        value: "true"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: LOG_STRUCTURED
+        value: "false"
+      - key: IMAGE_PROCESSING
+        value: "false"
+      - key: UPLOAD_DIR
+        value: /tmp/kolab-uploads
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kolab-db
+          property: connectionString
+
+databases:
+  - name: kolab-db
+    plan: free

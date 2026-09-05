@@ -30,4 +30,4 @@ RUN addgroup -S app && adduser -S app -G app
 USER app
 
 EXPOSE 3000
-CMD ["node", "dist/src/main.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/prisma/seed.js && node dist/src/main.js"]
