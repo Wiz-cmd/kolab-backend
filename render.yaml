@@ -1,4 +1,4 @@
-# Render Blueprint — deploy Kolab API + managed Postgres in one click.
+# Render Blueprint — deploy Kolab API + managed Postgres in one click (rebuilt after region fix).
 # Use: Render dashboard -> New + -> Blueprint -> connect this repo.
 # After deploy, the API is at https://kolab-api.onrender.com  (edit in env APP_BASE_URL if you rename it).
 
