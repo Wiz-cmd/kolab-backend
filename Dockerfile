@@ -24,10 +24,12 @@ RUN npm ci --omit=dev || npm install --omit=dev
 RUN npx prisma generate
 
 COPY --from=build /app/dist ./dist
+COPY scripts ./scripts
+RUN chmod +x scripts/*.sh
 
 # Non-root user for safety
 RUN addgroup -S app && adduser -S app -G app
 USER app
 
 EXPOSE 3000
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/prisma/seed.js && node dist/src/main.js"]
+CMD ["sh", "scripts/entrypoint.sh"]

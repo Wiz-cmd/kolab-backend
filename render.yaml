@@ -9,6 +9,7 @@ services:
     plan: free
     region: ohio
     dockerfilePath: ./Dockerfile
+    preDeployCommand: sh scripts/predeploy.sh
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
@@ -42,3 +43,4 @@ services:
 databases:
   - name: kolab-db
     plan: free
+    region: ohio
