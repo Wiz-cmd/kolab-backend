@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment - NEVER commit real secrets
+.env
+.env.local
+.env.development
+.env.production
+
+# Uploads (local disk during development)
+uploads/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Prisma
+prisma/*.db
+
+# OS
+.DS_Store
+Thumbs.db

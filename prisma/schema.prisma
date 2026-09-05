@@ -1,0 +1,612 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CREATOR
+  MODEL
+  PHOTOGRAPHER
+  BRAND
+  ADMIN
+}
+
+enum DealStatus {
+  PENDING
+  ACCEPTED
+  IN_PROGRESS
+  DELIVERED
+  COMPLETED
+  DISPUTED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  HELD_IN_ESCROW
+  RELEASED
+  REFUNDED
+  FAILED
+}
+
+model User {
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  passwordHash         String?
+  name                 String
+  role                 Role      @default(CREATOR)
+  bio                  String?
+  location             String?
+  avatarUrl            String?
+  coverUrl             String?
+  rate                 String?
+  isVerified           Boolean   @default(false)
+  measurements         Json?
+  followersCount       Int       @default(0)
+  collabsCount         Int       @default(0)
+  balance              Float     @default(0)
+  isEmailVerified      Boolean   @default(false)
+  isBanned             Boolean   @default(false)
+  bannedAt             DateTime?
+  banReason            String?
+  failedLoginAttempts  Int       @default(0)
+  lockedUntil          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  // Verification / verified-badge workflow
+  verificationStatus VerificationStatus @default(NONE)
+  idUrl              String?
+  portfolioProofUrl  String?
+  verifiedAt         DateTime?
+  verificationNote   String?
+
+  // Optional 2FA (brands/admins)
+  twoFactorSecret  String?
+  twoFactorEnabled Boolean  @default(false)
+
+  // Public key for E2EE chat (curve P-256 SPKI, base64). Public by design.
+  publicKey String?
+
+  posts            Post[]
+  hotspots         Hotspot[]          @relation("CreatedHotspots")
+  checkIns         HotspotCheckIn[]
+  sentDeals        Deal[]             @relation("BrandDeals")
+  receivedDeals    Deal[]             @relation("CreatorDeals")
+  messages         Message[]
+  portfolio        PortfolioItem[]
+  reviewsGiven     Review[]           @relation("ReviewsGiven")
+  reviewsReceived  Review[]           @relation("ReviewsReceived")
+  likes            Like[]
+  interests        UserInterest[]
+  engagements      Engagement[]
+  following        Follow[]           @relation("Following")
+  followers        Follow[]           @relation("Followers")
+  refreshTokens    RefreshToken[]
+  passwordResets   PasswordReset[]
+  notifications    Notification[]
+  reportsMade      Report[]           @relation("ReportsMade")
+  reportsReceived  Report[]           @relation("ReportsReceived")
+  withdrawals      Withdrawal[]
+  deviceTokens     DeviceToken[]
+  savedSearches    SavedSearch[]
+  rateCards        RateCard[]
+  collections      PortfolioCollection[]
+  analyticsEvents  AnalyticsEvent[]
+  verifications    Verification[]
+  keeps            ContentKeep[]
+  notificationRules NotificationRule[]
+
+  @@index([role])
+  @@index([location])
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  userAgent  String?
+  ip         String?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_resets")
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String // deal | message | follow | review | system
+  title      String
+  body       String?
+  entityType String?
+  entityId   String?
+  data       Json?
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+model Report {
+  id              String       @id @default(cuid())
+  reporterId      String
+  reporter        User         @relation("ReportsMade", fields: [reporterId], references: [id])
+  reason          String
+  status          ReportStatus @default(OPEN)
+  reportedUserId  String?
+  reportedUser    User?        @relation("ReportsReceived", fields: [reportedUserId], references: [id])
+  reportedPostId  String?
+  createdById     String?
+  resolvedById    String?
+  resolution      String?
+  resolvedAt      DateTime?
+  createdAt       DateTime     @default(now())
+
+  @@index([status])
+  @@index([reportedUserId])
+  @@map("reports")
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  SKIPPED
+}
+
+model WebhookEvent {
+  id          String             @id @default(cuid())
+  provider    String // payfast | ozow
+  eventId     String             @unique
+  payload     Json
+  status      WebhookEventStatus @default(RECEIVED)
+  attempts    Int                @default(0)
+  lastError   String?
+  processedAt DateTime?
+  createdAt   DateTime           @default(now())
+
+  @@index([provider, eventId])
+  @@map("webhook_events")
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum VerificationStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ModerationStatus {
+  IN_REVIEW
+  APPROVED
+  FLAGGED
+  REMOVED
+}
+
+model Withdrawal {
+  id           String            @id @default(cuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id])
+  amount       Float
+  fee          Float             @default(0)
+  netAmount    Float
+  method       String // bank | payfast | paypal | eft
+  details      Json              @default("{}")
+  status       WithdrawalStatus  @default(PENDING)
+  payoutRef    String?
+  adminNote    String?
+  requestedAt  DateTime          @default(now())
+  processedAt  DateTime?
+  createdAt    DateTime          @default(now())
+
+  @@index([userId, status])
+  @@index([status])
+  @@map("withdrawals")
+}
+
+// Firebase Cloud Messaging registration tokens for mobile push.
+model DeviceToken {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String
+  platform   String   @default("android") // android | ios | web
+  lastUsedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, token])
+  @@index([userId])
+  @@map("device_tokens")
+}
+
+model Post {
+  id             String   @id @default(cuid())
+  authorId       String
+  author         User     @relation(fields: [authorId], references: [id])
+  location       String?
+  description    String
+  imageUrl       String?
+  videoUrl       String?
+  isStudioOrGear Boolean  @default(false)
+  // Content type for recommendations e.g. fashion, portrait, amapiano, street, commercial, beauty, lifestyle
+  category       String   @default("general")
+  tags           String[] @default([])
+  likesCount     Int      @default(0)
+  viewsCount     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  likes       Like[]
+  engagements Engagement[]
+  hotspotId   String?
+  hotspot     Hotspot? @relation(fields: [hotspotId], references: [id])
+  publications Publication[]
+  keeps       ContentKeep[]
+
+  @@index([category])
+  @@index([createdAt])
+  @@index([likesCount, createdAt])
+  @@map("posts")
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@map("likes")
+}
+
+// Tracks what content types a user prefers (built from likes + views)
+model UserInterest {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // category key e.g. fashion, model, photographer, johannesburg, amapiano
+  key       String
+  score     Float    @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+  @@map("user_interests")
+}
+
+// Lightweight engagement log for ranking (view, like, share, collab_tap)
+model Engagement {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  type      String   // view | like | share | collab_tap
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([postId])
+  @@map("engagements")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  follower    User     @relation("Following", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("Followers", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@map("follows")
+}
+
+model Hotspot {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  category      String
+  province      String
+  city          String
+  address       String?
+  latitude      Float?
+  longitude     Float?
+  imageUrl      String?
+  rating        Float    @default(0)
+  reviewCount   Int      @default(0)
+  checkInsCount Int      @default(0)
+  createdById   String?
+  createdBy     User?    @relation("CreatedHotspots", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  checkIns HotspotCheckIn[]
+  posts    Post[]
+
+  @@index([province, category, checkInsCount])
+  @@map("hotspots")
+}
+
+model HotspotCheckIn {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  hotspotId String
+  hotspot   Hotspot  @relation(fields: [hotspotId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, hotspotId])
+  @@map("hotspot_checkins")
+}
+
+model Deal {
+  id            String        @id @default(cuid())
+  brandId       String
+  brand         User          @relation("BrandDeals", fields: [brandId], references: [id])
+  creatorId     String
+  creator       User          @relation("CreatorDeals", fields: [creatorId], references: [id])
+  title         String
+  description   String?
+  amount        Float
+  platformFee   Float
+  creatorAmount Float
+  status        DealStatus    @default(PENDING)
+  paymentStatus PaymentStatus @default(PENDING)
+  contractUrl   String?
+  deliverables  String?
+  deadline      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  completedAt   DateTime?
+  gatewayRef    String? // provider transaction reference
+  payoutRef     String? // provider payout/release reference
+  amountPaid    Float?   // what actually cleared into escrow
+  deniedReason  String?
+
+  messages Message[]
+  reviews  Review[]
+
+  contract Contract?
+
+  @@index([brandId, status])
+  @@index([creatorId, status])
+  @@map("deals")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id])
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id])
+  content   String
+  isRead    Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([dealId, createdAt])
+  @@map("messages")
+}
+
+model PortfolioItem {
+  id           String               @id @default(cuid())
+  userId       String
+  user         User                 @relation(fields: [userId], references: [id])
+  collectionId String?
+  collection   PortfolioCollection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  imageUrl     String
+  caption      String?
+  createdAt    DateTime             @default(now())
+
+  @@index([collectionId])
+  @@map("portfolio_items")
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  dealId     String?
+  deal       Deal?    @relation(fields: [dealId], references: [id])
+  reviewerId String
+  reviewer   User     @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  revieweeId String
+  reviewee   User     @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+
+  @@map("reviews")
+}
+
+model ProvinceStats {
+  id         String   @id @default(cuid())
+  province   String
+  month      String
+  checkIns   Int      @default(0)
+  postsCount Int      @default(0)
+  dealsCount Int      @default(0)
+  score      Float    @default(0)
+  rank       Int?
+  updatedAt  DateTime @updatedAt
+
+  @@unique([province, month])
+  @@map("province_stats")
+}
+
+model Contract {
+  id          String   @id @default(cuid())
+  dealId      String   @unique
+  deal        Deal     @relation(fields: [dealId], references: [id])
+  html        String
+  contractUrl String?
+  storageKey  String?
+  generatedBy String
+  generatedAt DateTime @default(now())
+
+  @@map("contracts")
+}
+
+// ── Verified badge workflow (admin approves ID / portfolio proof) ──────────
+model Verification {
+  id        String             @id @default(cuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    VerificationStatus @default(PENDING)
+  idUrl     String?
+  proofUrl  String?
+  note      String?
+  reviewedBy String?
+  reviewedAt DateTime?
+  createdAt DateTime           @default(now())
+
+  @@index([status])
+  @@index([userId])
+  @@map("verifications")
+}
+
+// ── Saved searches / alerts ("notify me when a model in CPT posts") ─────────
+model SavedSearch {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String?
+  // Structured filters: { role?, location?, province?, city?, category?, tags?, minRate? }
+  filters    Json     @default("{}")
+  active     Boolean  @default(true)
+  lastRunAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, active])
+  @@map("saved_searches")
+}
+
+// ── Structured rate cards & packages (in addition to free-text User.rate) ───
+model RateCard {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String   // e.g. "Basic shoot", "Events day rate"
+  price     Float
+  unit      String   @default("per_booking") // per_hour | per_day | per_booking
+  includes  String?
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([userId, active])
+  @@map("rate_cards")
+}
+
+// ── Portfolio collections (group work by campaign) ──────────────────────────
+model PortfolioCollection {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  description String?
+  coverUrl  String?
+  createdAt DateTime @default(now())
+
+  items PortfolioItem[]
+
+  @@index([userId])
+  @@map("portfolio_collections")
+}
+
+// ── Creator analytics events (profile visits, post views, collab taps) ──────
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  userId    String // the creator whose profile/post was viewed
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String // profile_visit | post_view | collab_tap | impression
+  postId    String?
+  viewerId  String? // null for anonymous
+  createdAt DateTime @default(now())
+
+  @@index([userId, type, createdAt])
+  @@map("analytics_events")
+}
+
+// ── Content moderation queue (auto-flag + admin review) ─────────────────────
+model Publication {
+  id            String        @id @default(cuid())
+  postId        String
+  post          Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  status        ModerationStatus @default(IN_REVIEW)
+  reason        String?
+  autoScore     Float?        // 0..1 auto-flag confidence
+  flaggedAt     DateTime      @default(now())
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  note          String?
+
+  @@index([status])
+  @@map("publications")
+}
+
+model ContentKeep {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@map("content_keeps")
+}
+
+model NotificationRule {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // What triggers: e.g. "mention", "collab_request", "deal_update"
+  event      String
+  channel    String    @default("push") // push | email | in_app
+  enabled    Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, event, channel])
+  @@map("notification_rules")
+}

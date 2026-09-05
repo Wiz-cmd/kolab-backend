@@ -1,0 +1,75 @@
+version: "3.9"
+
+# One-command local/prod stack: API + Postgres.
+#   docker compose up --build
+# The API applies migrations on start via the prisma-migrate job below.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kolab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kolab}
+      POSTGRES_DB: ${POSTGRES_DB:-kolab}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kolab} -d ${POSTGRES_DB:-kolab}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kolab}:${POSTGRES_PASSWORD:-kolab}@db:5432/${POSTGRES_DB:-kolab}?schema=public
+    command: sh -c "npm ci && npx prisma generate && npx prisma migrate deploy && echo 'migrations applied'"
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kolab}:${POSTGRES_PASSWORD:-kolab}@db:5432/${POSTGRES_DB:-kolab}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-1h}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      # Never ship CORS_ORIGINS=* in production; list real client origins.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # Proxy hops (0 when exposed directly; 1 behind nginx/traefik/ALB) so per-IP
+      # rate limiting sees the real client address.
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
+      # HSTS only when TLS is terminated in front of the app.
+      ENABLE_HSTS: ${ENABLE_HSTS:-true}
+      # Bring in the rest of your .env vars automatically
+      # (S3_*, SMTP_*, PAYFAST_*, OZOW_*, FIREBASE_*, SENTRY_*, etc.)
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - uploads:/app/uploads
+
+volumes:
+  pgdata:
+  uploads:
