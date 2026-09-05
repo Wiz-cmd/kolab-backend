@@ -11,8 +11,8 @@ build/
 .env.development
 .env.production
 
-# Uploads (local disk during development)
-uploads/
+# Uploads on disk during local development (source module lives in src/uploads)
+/uploads/
 
 # Logs
 *.log
