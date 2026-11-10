@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { Role } from '@prisma/client';
+import { Prisma, Role, VerificationStatus } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
@@ -123,6 +123,65 @@ export class UsersService {
     return this.prisma.portfolioItem.create({
       data: { userId, imageUrl, caption },
     });
+  }
+
+  /**
+   * Account deletion (Google Play requirement + POPIA section 24).
+   *
+   * Personal content and identifiers are removed or overwritten immediately,
+   * and every session is revoked. Deal/review records are retained in
+   * anonymised form because they are financial/contractual records; the public
+   * profile shows "Deleted user" and cannot be signed into again.
+   */
+  async deleteMe(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    await this.prisma.$transaction([
+      this.prisma.portfolioItem.deleteMany({ where: { userId } }),
+      this.prisma.portfolioCollection.deleteMany({ where: { userId } }),
+      this.prisma.userInterest.deleteMany({ where: { userId } }),
+      this.prisma.follow.deleteMany({
+        where: { OR: [{ followerId: userId }, { followingId: userId }] },
+      }),
+      this.prisma.deviceToken.deleteMany({ where: { userId } }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+      this.prisma.passwordReset.deleteMany({ where: { userId } }),
+      this.prisma.notification.deleteMany({ where: { userId } }),
+      this.prisma.savedSearch.deleteMany({ where: { userId } }),
+      this.prisma.rateCard.deleteMany({ where: { userId } }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          email: `deleted+${userId}@deleted.kolab.invalid`,
+          name: 'Deleted user',
+          passwordHash: null,
+          bio: null,
+          location: null,
+          avatarUrl: null,
+          coverUrl: null,
+          rate: null,
+          measurements: Prisma.DbNull,
+          isVerified: false,
+          isEmailVerified: false,
+          isBanned: true,
+          bannedAt: new Date(),
+          banReason: 'Account deleted by user',
+          twoFactorSecret: null,
+          twoFactorEnabled: false,
+          publicKey: null,
+          verificationStatus: VerificationStatus.NONE,
+          idUrl: null,
+          portfolioProofUrl: null,
+          verificationNote: null,
+        },
+      }),
+    ]);
+
+    return { deleted: true };
   }
 
   async follow(followerId: string, followingId: string) {

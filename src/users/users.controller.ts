@@ -96,6 +96,14 @@ export class UsersController {
     return this.usersService.addPortfolioItem(id, dto.imageUrl, dto.caption);
   }
 
+  /** Permanently deletes the caller's account (Play Store requirement). */
+  @Delete('me')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  deleteMe(@CurrentUser('id') id: string) {
+    return this.usersService.deleteMe(id);
+  }
+
   @Post(':id/follow')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
