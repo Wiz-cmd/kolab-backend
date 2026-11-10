@@ -27,6 +27,7 @@ import { CollectionsModule } from './collections/collections.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ModerationModule } from './moderation/moderation.module';
 import { SocialModule } from './social/social.module';
+import { AiModule } from './ai/ai.module';
 import { RequestContextMiddleware } from './common/request-context.middleware';
 import { SecurityHeadersMiddleware } from './common/security-headers.middleware';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
@@ -63,6 +64,7 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     AnalyticsModule,
     ModerationModule,
     SocialModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],

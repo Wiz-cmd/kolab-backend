@@ -1,0 +1,20 @@
+name: Keep Alive
+
+on:
+  schedule:
+    # Render free web services sleep after ~15 min idle; this pinger
+    # wakes kolab-api every 10 min so the app responds instantly.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Wake kolab-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit health endpoint
+        run: |
+          CODE=$(curl -sS -m 90 -o /dev/null -w '%{http_code}' \
+            https://kolab-api-7r6i.onrender.com/api/health) || CODE=000
+          echo "health responded with HTTP $CODE"
+          test "$CODE" = "200"

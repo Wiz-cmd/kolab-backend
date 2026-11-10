@@ -25,3 +25,11 @@ prisma/*.db
 # OS
 .DS_Store
 Thumbs.db
+
+# Local CLI scratch output that may contain production secrets
+out_*.json
+login.json
+reg*.json
+appbase*.json
+pgnew.json
+
