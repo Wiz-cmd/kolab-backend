@@ -1,5 +1,5 @@
 # ── Build stage ────────────────────────────────────────────────────
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 # Install deps (needed for prisma generate + nest build)
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 
 # ── Runtime stage ──────────────────────────────────────────────────
-FROM node:20-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
