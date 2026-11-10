@@ -9,6 +9,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # Major bumps need a deliberate migration (config changes, breaking APIs).
+    # Keep CI green by only auto-proposing minor and patch updates.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       nest:
         patterns:
