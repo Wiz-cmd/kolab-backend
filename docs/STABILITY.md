@@ -167,10 +167,10 @@ These are mature, free projects that address the remaining stability gaps.
 
 ## 6. Security cleanup checklist (do these once)
 
-- [ ] **Rotate the GitHub token** currently embedded in
-      `kolab-backend-updated/.git/config`. Revoke it at
-      <https://github.com/settings/tokens> and re-authenticate with Git
-      Credential Manager.
+- [ ] **Revoke the old GitHub token**. It has been removed from
+      `kolab-backend-updated/.git/config` and the remotes are clean again, but
+      the token itself is still valid until revoked at
+      <https://github.com/settings/tokens>.
 - [ ] **Rotate the Render Postgres password** (the old URL is in local JSON
       files). The old DB is expired, but rotate anything reused.
 - [ ] **Rotate `JWT_SECRET`** in Render (all sessions are invalidated).
@@ -187,7 +187,7 @@ These are mature, free projects that address the remaining stability gaps.
 ## 7. CI behaviour
 
 - `kolab-backend/.github/workflows/ci.yml` runs install → Prisma generate →
-  typecheck → build → 63+ unit tests → migrations → API smoke test on every
+  typecheck → build → 69 unit tests → migrations → API smoke test on every
   push/PR.
 - `kolab/.github/workflows/build-apk.yml` builds a debug APK in the cloud and
   runs JVM tests.
