@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ModerationService } from '../moderation/moderation.service';
 import { AlertsService } from '../alerts/alerts.service';
@@ -24,6 +24,19 @@ const W = {
   exploration: 0.8,
 };
 
+const POST_AUTHOR_SELECT = {
+  id: true,
+  name: true,
+  avatarUrl: true,
+  role: true,
+  location: true,
+} as const;
+
+const POST_INCLUDE = {
+  author: { select: POST_AUTHOR_SELECT },
+  _count: { select: { comments: true } },
+} as const;
+
 @Injectable()
 export class PostsService {
   constructor(
@@ -40,6 +53,7 @@ export class PostsService {
       location?: string;
       imageUrl?: string;
       videoUrl?: string;
+      filter?: string;
       isStudioOrGear?: boolean;
       hotspotId?: string;
       category?: string;
@@ -53,14 +67,13 @@ export class PostsService {
         location: data.location,
         imageUrl: data.imageUrl,
         videoUrl: data.videoUrl,
+        filter: data.filter,
         isStudioOrGear: data.isStudioOrGear || false,
         hotspotId: data.hotspotId,
         category: (data.category || 'general').toLowerCase(),
         tags: (data.tags || []).map((t) => t.toLowerCase()),
       },
-      include: {
-        author: { select: { id: true, name: true, avatarUrl: true, role: true, location: true } },
-      },
+      include: POST_INCLUDE,
     });
 
     // Content moderation auto-flag (fire-and-forget, never blocks publishing).
@@ -73,7 +86,7 @@ export class PostsService {
       .matchAndNotify(post.author, { id: post.id, category: post.category, tags: post.tags })
       .catch(() => null);
 
-    return post;
+    return this.decorate(post);
   }
 
   /**
@@ -119,16 +132,16 @@ export class PostsService {
       }
     }
 
-    const find = () =>
-      this.prisma.post.findMany({
+    const find = async () => {
+      const posts = await this.prisma.post.findMany({
         where,
         take: limit,
         skip,
         orderBy: { createdAt: 'desc' },
-        include: {
-          author: { select: { id: true, name: true, avatarUrl: true, role: true, location: true } },
-        },
+        include: POST_INCLUDE,
       });
+      return posts.map((post) => this.decorate(post));
+    };
 
     // Unfiltered feed keeps its short cache; search queries skip it.
     if (Object.keys(where).length === 0) {
@@ -170,9 +183,7 @@ export class PostsService {
         this.prisma.post.findMany({
           take: 150, // candidate pool
           orderBy: { createdAt: 'desc' },
-          include: {
-            author: { select: { id: true, name: true, avatarUrl: true, role: true, location: true } },
-          },
+          include: POST_INCLUDE,
         }),
       ),
     ]);
@@ -228,20 +239,25 @@ export class PostsService {
     });
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map((s) => s.post);
+    return scored.slice(0, limit).map((s) => this.decorate(s.post));
   }
 
   private async coldStartFeed(limit: number) {
-    // Mix of most liked recent posts (public path — cached briefly).
-    return this.cache.wrap(`feed:cold:${limit}`, 20_000, () =>
-      this.prisma.post.findMany({
+    // Mix of most liked recent posts (public path - cached briefly).
+    return this.cache.wrap(`feed:cold:${limit}`, 20_000, async () => {
+      const posts = await this.prisma.post.findMany({
         take: limit,
         orderBy: [{ likesCount: 'desc' }, { createdAt: 'desc' }],
-        include: {
-          author: { select: { id: true, name: true, avatarUrl: true, role: true, location: true } },
-        },
-      }),
-    );
+        include: POST_INCLUDE,
+      });
+      return posts.map((post) => this.decorate(post));
+    });
+  }
+
+  /** Adds `commentsCount` next to Prisma's relation count. */
+  private decorate<T extends { _count?: { comments: number } }>(post: T) {
+    const { _count, ...rest } = post as any;
+    return { ...rest, commentsCount: _count?.comments ?? 0 };
   }
 
   async toggleLike(userId: string, postId: string) {
@@ -251,33 +267,38 @@ export class PostsService {
 
     if (existing) {
       await this.prisma.like.delete({ where: { id: existing.id } });
-      await this.prisma.post.update({
+      const updated = await this.prisma.post.update({
         where: { id: postId },
         data: { likesCount: { decrement: 1 } },
+        select: { likesCount: true },
       });
+      this.cache.delPrefix('feed:');
       // Soft decay interest (optional: skip for simplicity)
-      return { liked: false };
+      return { liked: false, likesCount: updated.likesCount };
     }
 
     await this.prisma.like.create({ data: { userId, postId } });
-    await this.prisma.post.update({
+    const updated = await this.prisma.post.update({
       where: { id: postId },
       data: { likesCount: { increment: 1 } },
+      select: { likesCount: true },
     });
 
     // Record engagement + strengthen interests from this post
     await this.recordEngagement(userId, postId, 'like');
     await this.boostInterestsFromPost(userId, postId, 1.0);
+    this.cache.delPrefix('feed:');
 
-    return { liked: true };
+    return { liked: true, likesCount: updated.likesCount };
   }
 
-  /** Call when user views a post (feed impression / open) */
-  async recordView(userId: string, postId: string) {
+  /** Call when user views a post (feed impression / open). Guests count too. */
+  async recordView(userId: string | null, postId: string) {
     await this.prisma.post.update({
       where: { id: postId },
       data: { viewsCount: { increment: 1 } },
     });
+    if (!userId) return { ok: true };
     await this.recordEngagement(userId, postId, 'view');
     // Weaker signal than like
     await this.boostInterestsFromPost(userId, postId, 0.15);
@@ -335,5 +356,63 @@ export class PostsService {
       orderBy: { score: 'desc' },
       take: 30,
     });
+  }
+
+  // ── Frames comments ────────────────────────────────────────────────
+
+  async listComments(postId: string, limit = 50, skip = 0) {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { id: true },
+    });
+    if (!post) throw new NotFoundException('Post not found');
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.comment.findMany({
+        where: { postId },
+        take: limit,
+        skip,
+        orderBy: { createdAt: 'desc' },
+        include: { author: { select: POST_AUTHOR_SELECT } },
+      }),
+      this.prisma.comment.count({ where: { postId } }),
+    ]);
+
+    return { data, total, take: limit, skip };
+  }
+
+  async createComment(userId: string, postId: string, content: string) {
+    const text = content.trim();
+    if (!text) throw new BadRequestException('Comment cannot be empty');
+
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { id: true },
+    });
+    if (!post) throw new NotFoundException('Post not found');
+
+    const comment = await this.prisma.comment.create({
+      data: { postId, authorId: userId, content: text },
+      include: { author: { select: POST_AUTHOR_SELECT } },
+    });
+
+    // Comment count is part of every feed payload.
+    this.cache.delPrefix('feed:');
+    return comment;
+  }
+
+  async deleteComment(commentId: string, userId: string, role: string) {
+    const comment = await this.prisma.comment.findUnique({
+      where: { id: commentId },
+      select: { id: true, authorId: true, postId: true },
+    });
+    if (!comment) throw new NotFoundException('Comment not found');
+    if (comment.authorId !== userId && role !== 'ADMIN') {
+      throw new ForbiddenException('Only the author (or admin) can delete this comment');
+    }
+
+    await this.prisma.comment.delete({ where: { id: commentId } });
+    this.cache.delPrefix('feed:');
+    return { success: true, postId: comment.postId };
   }
 }

@@ -17,8 +17,11 @@ import { StorageService } from '../storage/storage.service';
 
 const ALLOWED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/quicktime'];
 
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024; // 15 MB
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50 MB (short Frames clips)
+
 // Per-user daily upload cap (availability / storage-exhaustion guard).
-const MAX_USER_UPLOAD_BYTES_DAY = 100 * 1024 * 1024; // 100 MB / user / day
+const MAX_USER_UPLOAD_BYTES_DAY = 250 * 1024 * 1024; // 250 MB / user / day
 
 @Controller('uploads')
 export class UploadsController {
@@ -34,7 +37,7 @@ export class UploadsController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: 15 * 1024 * 1024 },
+      limits: { fileSize: MAX_VIDEO_BYTES },
       fileFilter: (_req, file, cb) => {
         if (!ALLOWED.includes(file.mimetype)) {
           return cb(new BadRequestException('Unsupported file type') as any, false);
@@ -45,6 +48,9 @@ export class UploadsController {
   )
   async upload(@UploadedFile() file: Express.Multer.File, @CurrentUser('id') userId: string) {
     if (!file) throw new BadRequestException('No file uploaded');
+    if (file.mimetype.startsWith('image/') && file.size > MAX_IMAGE_BYTES) {
+      throw new BadRequestException('Images must be 15 MB or smaller');
+    }
 
     this.enforceDailyQuota(userId, file.size);
 

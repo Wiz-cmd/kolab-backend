@@ -11,12 +11,20 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { PostsService } from './posts.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { CurrentUser } from '../common/current-user.decorator';
 import { CreatePostDto } from './dto/create-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
+
+class CreateCommentDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(1000)
+  content: string;
+}
 
 class LimitQueryDto {
   @IsOptional()
@@ -70,10 +78,35 @@ export class PostsController {
   }
 
   @Post(':id/view')
+  @UseGuards(OptionalJwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  view(@CurrentUser('id') userId: string | null, @Param('id') id: string) {
+    return this.postsService.recordView(userId ?? null, id);
+  }
+
+  @Post(':id/comments')
+  @UseGuards(JwtAuthGuard)
+  comment(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Body() dto: CreateCommentDto,
+  ) {
+    return this.postsService.createComment(userId, id, dto.content);
+  }
+
+  @Get(':id/comments')
+  comments(@Param('id') id: string, @Query() query: LimitQueryDto) {
+    return this.postsService.listComments(id, query.limit, query.skip);
+  }
+
+  @Delete(':id/comments/:commentId')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  view(@CurrentUser('id') userId: string, @Param('id') id: string) {
-    return this.postsService.recordView(userId, id);
+  deleteComment(
+    @CurrentUser() user: any,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.postsService.deleteComment(commentId, user.id, user.role);
   }
 
   @Post(':id/collab-tap')

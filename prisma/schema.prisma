@@ -73,6 +73,7 @@ model User {
   publicKey String?
 
   posts            Post[]
+  comments         Comment[]
   hotspots         Hotspot[]          @relation("CreatedHotspots")
   checkIns         HotspotCheckIn[]
   sentDeals        Deal[]             @relation("BrandDeals")
@@ -267,6 +268,8 @@ model Post {
   description    String
   imageUrl       String?
   videoUrl       String?
+  // Frame look applied by the creator (clean, golden, cool, mono, fade, vivid).
+  filter         String?
   isStudioOrGear Boolean  @default(false)
   // Content type for recommendations e.g. fashion, portrait, amapiano, street, commercial, beauty, lifestyle
   category       String   @default("general")
@@ -277,6 +280,7 @@ model Post {
   updatedAt      DateTime @updatedAt
 
   likes       Like[]
+  comments    Comment[]
   engagements Engagement[]
   hotspotId   String?
   hotspot     Hotspot? @relation(fields: [hotspotId], references: [id])
@@ -287,6 +291,20 @@ model Post {
   @@index([createdAt])
   @@index([likesCount, createdAt])
   @@map("posts")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([postId, createdAt])
+  @@index([authorId])
+  @@map("comments")
 }
 
 model Like {

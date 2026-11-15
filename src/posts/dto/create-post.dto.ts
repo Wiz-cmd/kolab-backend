@@ -26,6 +26,11 @@ export class CreatePostDto {
   videoUrl?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  filter?: string;
+
+  @IsOptional()
   @IsBoolean()
   isStudioOrGear?: boolean;
 
