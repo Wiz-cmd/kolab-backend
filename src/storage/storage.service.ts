@@ -8,8 +8,9 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'crypto';
+import { v2 as cloudinary } from 'cloudinary';
 
-export type StorageMode = 's3' | 'local';
+export type StorageMode = 'cloudinary' | 's3' | 'local';
 export interface ProcessedImage {
   buffer: Buffer;
   contentType: string;
@@ -73,11 +74,11 @@ const MAGIC_DETECTORS: ReadonlyArray<{
 ];
 
 /**
- * Object-storage abstraction. Defaults to S3-compatible API which also works
- * with Cloudflare R2 (just point `S3_ENDPOINT` at your R2 endpoint and use
- * R2 access key/secret).
+ * Object-storage abstraction. In production, set CLOUDINARY_URL to store
+ * Frames media on Cloudinary (free tier, no card required, global CDN).
+ * Alternatively, set S3_* for any S3-compatible provider (e.g. Cloudflare R2).
  *
- * When `S3_BUCKET` is not configured, the service transparently falls back to
+ * When neither is configured, the service transparently falls back to
  * "local" mode (files stored under UPLOAD_DIR and served statically), so
  * development works without any cloud credentials.
  */
@@ -86,8 +87,28 @@ export class StorageService {
   private readonly logger = new Logger(StorageService.name);
   private client: S3Client | null = null;
   private readonly bucket: string | null;
+  private readonly useCloudinary: boolean;
 
   constructor(private config: ConfigService) {
+    const cloudinaryUrl = this.config.get('CLOUDINARY_URL');
+    if (cloudinaryUrl) {
+      // cloudinary://<api_key>:<api_secret>@<cloud_name>
+      const parsed = new URL(cloudinaryUrl);
+      cloudinary.config({
+        cloud_name: parsed.hostname,
+        api_key: decodeURIComponent(parsed.username),
+        api_secret: decodeURIComponent(parsed.password),
+        secure: true,
+      });
+      this.useCloudinary = true;
+      this.bucket = null;
+      this.logger.log(
+        `Storage initialised for Cloudinary cloud "${parsed.hostname}".`,
+      );
+      return;
+    }
+
+    this.useCloudinary = false;
     this.bucket = this.config.get('S3_BUCKET') || null;
 
     if (this.bucket) {
@@ -111,6 +132,7 @@ export class StorageService {
   }
 
   get mode(): StorageMode {
+    if (this.useCloudinary) return 'cloudinary';
     return this.client ? 's3' : 'local';
   }
 
@@ -120,6 +142,9 @@ export class StorageService {
     body: Buffer | NodeJS.ReadableStream,
     contentType: string,
   ): Promise<{ key: string; url: string }> {
+    if (this.useCloudinary) {
+      return this.putCloudinary(key, body, contentType);
+    }
     if (!this.client) {
       // Local fallback: write to disk under UPLOAD_DIR.
       return this.putLocal(key, body, contentType);
@@ -137,8 +162,52 @@ export class StorageService {
     return { key, url: this.publicUrl(key) };
   }
 
+  /** Cloudinary stores assets by public_id (the key without its extension). */
+  private cloudinaryPublicId(key: string): string {
+    return key.replace(/\.[^.]+$/, '');
+  }
+
+  private cloudinaryResourceType(key: string): 'image' | 'video' {
+    return /\.(mp4|mov|webm|m4v)$/i.test(key) ? 'video' : 'image';
+  }
+
+  private putCloudinary(
+    key: string,
+    body: Buffer | NodeJS.ReadableStream,
+    _contentType: string,
+  ): Promise<{ key: string; url: string }> {
+    const publicId = this.cloudinaryPublicId(key);
+    const resourceType = this.cloudinaryResourceType(key);
+
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { public_id: publicId, resource_type: resourceType, overwrite: false },
+        (error, result) => {
+          if (error) return reject(error);
+          if (!result || !result.secure_url) {
+            return reject(new Error('Cloudinary upload returned no secure URL'));
+          }
+          resolve({ key: publicId, url: result.secure_url });
+        },
+      );
+
+      if (Buffer.isBuffer(body)) {
+        uploadStream.end(body);
+      } else {
+        (body as NodeJS.ReadableStream).pipe(uploadStream);
+      }
+    });
+  }
+
   /** Generate a time-limited URL for private/secure reads. */
   async presignedGet(key: string, expiresInSeconds = 3600): Promise<string> {
+    if (this.useCloudinary) {
+      // Cloudinary delivers public assets directly; no signing is needed.
+      return cloudinary.url(this.cloudinaryPublicId(key), {
+        secure: true,
+        resource_type: this.cloudinaryResourceType(key),
+      });
+    }
     if (!this.client) {
       return `/uploads/${key}`;
     }
@@ -147,6 +216,12 @@ export class StorageService {
   }
 
   async delete(key: string): Promise<void> {
+    if (this.useCloudinary) {
+      await cloudinary.uploader.destroy(this.cloudinaryPublicId(key), {
+        resource_type: this.cloudinaryResourceType(key),
+      });
+      return;
+    }
     if (!this.client) return;
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket!, Key: key }),

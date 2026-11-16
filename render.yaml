@@ -42,6 +42,13 @@ services:
         value: "false"
       - key: UPLOAD_DIR
         value: /tmp/kolab-uploads
+      - key: ENABLE_HSTS
+        value: "true"
+      - key: MAIL_DEV_RETURN_TOKENS
+        value: "false"
+      # Cloudinary free media storage (no card). Set in the Render dashboard.
+      - key: CLOUDINARY_URL
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       # Set this in the Render dashboard (Environment tab) to your Neon
