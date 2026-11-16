@@ -15,6 +15,12 @@ class ExchangeDto {
 export class SocialController {
   constructor(private readonly social: SocialService) {}
 
+  /** Providers the app should display; unconfigured ones are omitted by the UI. */
+  @Get('providers')
+  listProviders() {
+    return this.social.listProviders();
+  }
+
   /** Build the OAuth authorize URL. Returns { configured:false } when the
    *  provider has no credentials — the app shows the "not configured" state. */
   @Get(':provider/start')

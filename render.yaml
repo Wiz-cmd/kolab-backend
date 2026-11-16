@@ -49,6 +49,22 @@ services:
       # Cloudinary free media storage (no card). Set in the Render dashboard.
       - key: CLOUDINARY_URL
         sync: false
+      # Social login OAuth clients. Set the pairs you want enabled in the
+      # dashboard; unconfigured providers are hidden in the app automatically.
+      - key: SOCIAL_REDIRECT_URL
+        value: kolab://auth/callback
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: INSTAGRAM_CLIENT_ID
+        sync: false
+      - key: INSTAGRAM_CLIENT_SECRET
+        sync: false
+      - key: X_CLIENT_ID
+        sync: false
+      - key: X_CLIENT_SECRET
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       # Set this in the Render dashboard (Environment tab) to your Neon

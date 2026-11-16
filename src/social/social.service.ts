@@ -38,6 +38,7 @@ export class SocialService {
       userinfoUrl: 'https://graph.instagram.com/me',
       scope: 'instagram_business_basic,instagram_business_manage_messages,business_management',
       usesBasicAuth: false,
+      usesPkce: false,
     },
     twitter: {
       authorizeUrl: 'https://twitter.com/i/oauth2/authorize',
@@ -45,8 +46,27 @@ export class SocialService {
       userinfoUrl: 'https://api.twitter.com/2/users/me?user.fields=profile_image_url,username',
       scope: 'tweet.read users.read offline.access',
       usesBasicAuth: true,
+      usesPkce: true,
+    },
+    google: {
+      authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
+      scope: 'openid email profile',
+      usesBasicAuth: false,
+      usesPkce: true,
     },
   } as const;
+
+  /** Accept the display names the Android app uses as well as canonical keys. */
+  static normaliseProvider(raw: string): string {
+    const key = (raw || '').trim().toLowerCase();
+    if (key === 'twitter-x' || key === 'x' || key === 'twitter') return 'twitter';
+    if (key === 'instagram') return 'instagram';
+    if (key === 'google') return 'google';
+    if (key === 'apple') return 'apple';
+    return key;
+  }
 
   constructor(
     private readonly config: ConfigService,
@@ -56,12 +76,15 @@ export class SocialService {
       this.config.get('SOCIAL_REDIRECT_URL') || 'kolab://auth/callback';
   }
 
-  private credentials(provider: string) {
-    const prefix = provider === 'twitter' ? 'X' : 'INSTAGRAM';
+  private credentials(rawProvider: string) {
+    const provider = SocialService.normaliseProvider(rawProvider);
+    const prefix =
+      provider === 'twitter' ? 'X' : provider === 'google' ? 'GOOGLE' : 'INSTAGRAM';
     const clientId = this.config.get(`${prefix}_CLIENT_ID`)?.trim();
     const clientSecret = this.config.get(`${prefix}_CLIENT_SECRET`)?.trim();
     const spec = SocialService.PROVIDERS[provider as keyof typeof SocialService.PROVIDERS];
     return {
+      provider,
       spec,
       clientId,
       clientSecret,
@@ -69,12 +92,21 @@ export class SocialService {
     };
   }
 
-  async start(provider: string) {
-    const cfg = this.credentials(provider);
+  /** Which social sign-ins are actually usable on this deployment. */
+  listProviders() {
+    return Object.keys(SocialService.PROVIDERS).map((key) => ({
+      provider: key,
+      configured: this.credentials(key).isConfigured,
+    }));
+  }
+
+  async start(rawProvider: string) {
+    const cfg = this.credentials(rawProvider);
     if (!cfg.isConfigured) {
-      return { configured: false, provider };
+      return { configured: false, provider: cfg.provider };
     }
 
+    const provider = cfg.provider;
     const state = randomBytes(16).toString('hex');
     const verifier = randomBytes(32).toString('base64url');
     this.pending.set(state, { provider, verifier, createdAt: Date.now() });
@@ -106,16 +138,17 @@ export class SocialService {
   }
 
   async exchange(
-    provider: string,
+    rawProvider: string,
     code: string,
     state: string,
     ip?: string,
     userAgent?: string,
   ) {
-    const cfg = this.credentials(provider);
+    const cfg = this.credentials(rawProvider);
     if (!cfg.isConfigured) {
-      throw new ServiceUnavailableException(`${provider} login is not configured on the server`);
+      throw new ServiceUnavailableException(`${cfg.provider} login is not configured on the server`);
     }
+    const provider = cfg.provider;
 
     const pending = this.pending.get(state);
     if (!pending || pending.provider !== provider) {
@@ -151,9 +184,12 @@ export class SocialService {
       client_id: cfg.clientId,
     });
 
+    if (cfg.spec.usesPkce) {
+      body.set('code_verifier', verifier);
+    }
+
     if (cfg.spec.usesBasicAuth) {
       // X: client-authenticates via HTTP Basic (client_id:secret) + PKCE.
-      body.set('code_verifier', verifier);
       const basic = Buffer.from(
         `${encodeURIComponent(cfg.clientId)}:${encodeURIComponent(cfg.clientSecret)}`,
       ).toString('base64');
@@ -207,6 +243,16 @@ export class SocialService {
         email: data.email ? String(data.email).toLowerCase() : `${id}@instagram.kolab`,
         name: data.username || `IG ${id}`,
         avatarUrl: data.profile_picture_url || undefined,
+      };
+    }
+
+    // Google userinfo
+    if (cfg.spec.userinfoUrl.includes('googleapis.com')) {
+      const id = String(data.sub || '');
+      return {
+        email: data.email ? String(data.email).toLowerCase() : `${id}@google.kolab`,
+        name: data.name || data.given_name || `Google ${id}`,
+        avatarUrl: data.picture || undefined,
       };
     }
 
