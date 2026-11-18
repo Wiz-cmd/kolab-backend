@@ -97,9 +97,16 @@ export class PostsService {
   async findFeed(
     limit = 30,
     skip = 0,
-    filters: { search?: string; category?: string; tags?: string } = {},
+    filters: { search?: string; category?: string; tags?: string; location?: string } = {},
   ) {
     const where: Record<string, any> = {};
+
+    if (filters.location) {
+      const city = filters.location.split(',')[0].trim();
+      if (city) {
+        where.location = { contains: city, mode: 'insensitive' };
+      }
+    }
 
     if (filters.category) {
       where.category = filters.category.toLowerCase();

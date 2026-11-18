@@ -53,6 +53,7 @@ export class PostsController {
       search: query.search,
       category: query.category,
       tags: query.tags,
+      location: query.location,
     });
   }
 

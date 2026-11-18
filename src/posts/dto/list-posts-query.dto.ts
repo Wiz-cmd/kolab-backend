@@ -30,4 +30,10 @@ export class ListPostsQueryDto {
   @IsString()
   @MaxLength(300)
   tags?: string;
+
+  /** City filter, e.g. "Cape Town". Matches posts from that area. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  location?: string;
 }
