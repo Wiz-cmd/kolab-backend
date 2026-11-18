@@ -161,4 +161,38 @@ describe('PostsService Frames', () => {
     });
     expect(prisma.engagement.create).not.toHaveBeenCalled();
   });
+
+  it('lets the author edit a Frame and invalidates cached feeds', async () => {
+    const { service, prisma, cache } = makeService();
+    prisma.post.findUnique.mockResolvedValue(postRow);
+    prisma.post.update.mockResolvedValue(postRow);
+
+    const result = await service.updatePost('post-1', 'user-1', 'CREATOR', {
+      description: '  Updated caption  ',
+      tags: ['Studio', ' frames '],
+      category: 'LIFESTYLE',
+    });
+
+    expect(prisma.post.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          description: 'Updated caption',
+          category: 'lifestyle',
+          tags: ['studio', 'frames'],
+        }),
+      }),
+    );
+    expect(cache.delPrefix).toHaveBeenCalledWith('feed:');
+    expect(result).toMatchObject({ id: 'post-1' });
+  });
+
+  it('rejects editing someone else\'s Frame', async () => {
+    const { service, prisma } = makeService();
+    prisma.post.findUnique.mockResolvedValue(postRow);
+
+    await expect(
+      service.updatePost('post-1', 'user-2', 'CREATOR', { description: 'hack' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.post.update).not.toHaveBeenCalled();
+  });
 });

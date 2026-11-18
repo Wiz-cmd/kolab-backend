@@ -161,6 +161,43 @@ export class PostsService {
     return { success: true };
   }
 
+  /** Edit the caption/metadata of an existing Frame (author or admin only). */
+  async updatePost(
+    postId: string,
+    userId: string,
+    role: string,
+    data: {
+      description?: string;
+      location?: string;
+      filter?: string;
+      isStudioOrGear?: boolean;
+      category?: string;
+      tags?: string[];
+    },
+  ) {
+    const existing = await this.prisma.post.findUnique({ where: { id: postId } });
+    if (!existing) throw new NotFoundException('Post not found');
+    if (existing.authorId !== userId && role !== 'ADMIN') {
+      throw new ForbiddenException('Only the author (or admin) can edit this post');
+    }
+
+    const update: Record<string, any> = {};
+    if (data.description !== undefined) update.description = data.description.trim();
+    if (data.location !== undefined) update.location = data.location;
+    if (data.filter !== undefined) update.filter = data.filter;
+    if (data.isStudioOrGear !== undefined) update.isStudioOrGear = data.isStudioOrGear;
+    if (data.category !== undefined) update.category = data.category.toLowerCase();
+    if (data.tags !== undefined) update.tags = data.tags.map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+    const post = await this.prisma.post.update({
+      where: { id: postId },
+      data: update,
+      include: POST_INCLUDE,
+    });
+    this.cache.delPrefix('feed:');
+    return this.decorate(post);
+  }
+
   /**
    * Personalized "For You" feed.
    * Ranks posts by what the user has liked / engaged with before.

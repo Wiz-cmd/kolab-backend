@@ -5,6 +5,7 @@ import {
   Post,
   Body,
   Param,
+  Patch,
   Query,
   UseGuards,
   HttpCode,
@@ -17,6 +18,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { CurrentUser } from '../common/current-user.decorator';
 import { CreatePostDto } from './dto/create-post.dto';
+import { UpdatePostDto } from './dto/update-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 
 class CreateCommentDto {
@@ -114,6 +116,12 @@ export class PostsController {
   @HttpCode(HttpStatus.OK)
   collabTap(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.postsService.recordCollabTap(userId, id);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  update(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: UpdatePostDto) {
+    return this.postsService.updatePost(id, user.id, user.role, dto);
   }
 
   @Delete(':id')
