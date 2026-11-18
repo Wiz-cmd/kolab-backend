@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { PostsModule } from './posts/posts.module';
 import { HotspotsModule } from './hotspots/hotspots.module';
+import { ChallengesModule } from './challenges/challenges.module';
 import { DealsModule } from './deals/deals.module';
 import { ChatModule } from './chat/chat.module';
 import { UploadsModule } from './uploads/uploads.module';
@@ -45,6 +46,7 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     UsersModule,
     PostsModule,
     HotspotsModule,
+    ChallengesModule,
     DealsModule,
     ChatModule,
     UploadsModule,

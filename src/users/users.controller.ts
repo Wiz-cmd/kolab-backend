@@ -11,7 +11,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
+import { IsOptional, IsString, IsUrl, MinLength, IsBoolean, IsDateString } from 'class-validator';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/current-user.decorator';
@@ -47,6 +47,18 @@ class UpdateProfileDto {
   @IsOptional()
   @IsString()
   publicKey?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  availableForCollab?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  availableUntil?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  showProfileViews?: boolean;
 }
 
 class PortfolioItemDto {
@@ -77,6 +89,12 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   getMe(@CurrentUser('id') id: string) {
     return this.usersService.findMe(id);
+  }
+
+  /** Creators with momentum in a city — used for "Rising in your city". */
+  @Get('rising')
+  rising(@Query('city') city?: string, @Query('take') take?: string) {
+    return this.usersService.rising(city, Math.min(50, Math.max(1, Number(take) || 12)));
   }
 
   @Get(':id')

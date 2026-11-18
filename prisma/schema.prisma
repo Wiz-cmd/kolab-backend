@@ -76,6 +76,11 @@ model User {
 
   // Login verification: a one-time code is sent to email or phone after the
   // password succeeds, before any JWT is issued.
+  // Discovery / marketplace signals used by the For You ranking.
+  availableForCollab Boolean      @default(true)
+  availableUntil     DateTime?
+  showProfileViews   Boolean       @default(true)
+
   phone            String?
   phoneVerified    Boolean       @default(false)
   loginOtpEnabled  Boolean       @default(false)

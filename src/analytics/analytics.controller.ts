@@ -52,6 +52,11 @@ export class AnalyticsController {
 
   /** Creator reads their own analytics summary. */
   @ApiOperation({ summary: 'My analytics summary' })
+  @Get('viewers')
+  viewers(@CurrentUser('id') userId: string) {
+    return this.analytics.viewers(userId, userId);
+  }
+
   @Get('me')
   summary(@CurrentUser('id') userId: string, @Query('days') days?: string) {
     const d = days ? Math.max(1, Math.min(365, Number(days) || 30)) : 30;

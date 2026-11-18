@@ -92,11 +92,60 @@ export class UsersService {
         collabsCount: true,
         measurements: true,
         publicKey: true,
+        availableForCollab: true,
+        availableUntil: true,
       },
       orderBy: { followersCount: 'desc' },
       skip: filters.skip || 0,
       take: filters.take || 50,
     });
+  }
+
+  /** Creators with recent activity and engagement in a given city. */
+  async rising(city?: string, take = 12) {
+    const where: any = { isBanned: false, role: { not: Role.BRAND } };
+    if (city) where.location = { contains: city.split(',')[0].trim(), mode: 'insensitive' };
+
+    const users = await this.prisma.user.findMany({
+      where,
+      take: Math.min(take * 4, 200),
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        location: true,
+        avatarUrl: true,
+        bio: true,
+        rate: true,
+        isVerified: true,
+        availableForCollab: true,
+        followersCount: true,
+        collabsCount: true,
+        posts: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: { likesCount: true, viewsCount: true, createdAt: true, comments: { select: { id: true } } },
+        },
+      },
+    });
+
+    const now = Date.now();
+    return users
+      .map((u: any) => {
+        const engagement = (u.posts || []).reduce(
+          (sum: number, p: any) => sum + (p.likesCount || 0) + (p.viewsCount || 0) * 0.2 + (p.comments?.length || 0) * 2,
+          0,
+        );
+        const freshness = (u.posts || []).some(
+          (p: any) => now - new Date(p.createdAt).getTime() < 14 * 86400000,
+        )
+          ? 10
+          : 0;
+        const { posts, ...profile } = u;
+        return { ...profile, risingScore: engagement + freshness + (u.availableForCollab ? 5 : 0) };
+      })
+      .sort((a: any, b: any) => b.risingScore - a.risingScore)
+      .slice(0, take);
   }
 
   async updateProfile(userId: string, data: any) {
@@ -110,11 +159,17 @@ export class UsersService {
         avatarUrl: data.avatarUrl,
         measurements: data.measurements,
         publicKey: data.publicKey,
+        availableForCollab: data.availableForCollab,
+        availableUntil: data.availableUntil ? new Date(data.availableUntil) : undefined,
+        showProfileViews: data.showProfileViews,
       },
       select: {
         id: true, email: true, name: true, role: true, location: true,
         avatarUrl: true, bio: true, rate: true, isVerified: true, measurements: true,
         publicKey: true,
+        availableForCollab: true,
+        availableUntil: true,
+        showProfileViews: true,
       },
     });
   }

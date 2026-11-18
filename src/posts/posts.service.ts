@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ModerationService } from '../moderation/moderation.service';
 import { AlertsService } from '../alerts/alerts.service';
 import { CacheService } from '../common/cache.service';
+import { DealStatus } from '@prisma/client';
 
 /**
  * Recommendation weights (similar to social "For You" feeds)
@@ -19,9 +20,16 @@ const W = {
   locationInterest: 2.0,
   followingAuthor: 5.0,
   likesLog: 1.2,
+  commentsLog: 1.6,
+  viewsLog: 0.4,
   recencyHours: 48,
   recencyBoost: 3.0,
   exploration: 0.8,
+  // Collaboration potential
+  available: 3.0,
+  profileComplete: 0.6,
+  dealSuccess: 1.5,
+  local: 3.5,
 };
 
 const POST_AUTHOR_SELECT = {
@@ -34,7 +42,7 @@ const POST_AUTHOR_SELECT = {
 
 const POST_INCLUDE = {
   author: { select: POST_AUTHOR_SELECT },
-  _count: { select: { comments: true } },
+  _count: { select: { comments: true, likes: true } },
 } as const;
 
 @Injectable()
@@ -215,14 +223,17 @@ export class PostsService {
       return this.coldStartFeed(limit);
     }
 
-    const [interests, following, recentPosts] = await Promise.all([
+    const [viewer, interests, following, recentPosts, completedDeals] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { location: true },
+      }),
       this.prisma.userInterest.findMany({ where: { userId } }),
       this.prisma.follow.findMany({
         where: { followerId: userId },
         select: { followingId: true },
       }),
-      // Candidate pool is shared across users, so cache it briefly. No per-post
-      // COUNT sub-query: `likesCount` is maintained by toggleLike().
+      // Candidate pool is shared across users, so cache it briefly.
       this.cache.wrap('feed:pool', 10_000, () =>
         this.prisma.post.findMany({
           take: 150, // candidate pool
@@ -230,53 +241,91 @@ export class PostsService {
           include: POST_INCLUDE,
         }),
       ),
+      // Collaboration signal: creators with completed deals are safer bets.
+      this.prisma.deal.groupBy({
+        by: ['creatorId'],
+        where: { status: DealStatus.COMPLETED },
+        _count: { _all: true },
+      }),
     ]);
 
     const interestMap = new Map(interests.map((i) => [i.key, i.score]));
     const followingSet = new Set(following.map((f) => f.followingId));
+    const dealSuccess = new Map(completedDeals.map((d) => [d.creatorId, d._count._all]));
+    const viewerCity = viewer?.location?.split(',')[0].trim().toLowerCase() || '';
+    const authorIds = Array.from(new Set(recentPosts.map((p) => p.authorId)));
+
+    const authors = await this.prisma.user.findMany({
+      where: { id: { in: authorIds } },
+      select: {
+        id: true,
+        availableForCollab: true,
+        availableUntil: true,
+        isVerified: true,
+        bio: true,
+        rate: true,
+        avatarUrl: true,
+        location: true,
+        _count: { select: { portfolio: true } },
+      },
+    });
+    const authorMap = new Map(authors.map((a) => [a.id, a]));
+
     const now = Date.now();
 
-    const scored = recentPosts.map((post) => {
+    const scored = recentPosts.map((post: any) => {
       let score = 0;
+      const author: any = authorMap.get(post.authorId);
 
-      // Category interest
+      // ── Creative quality + engagement ────────────────────────────────
+      const likes = post._count?.likes ?? post.likesCount ?? 0;
+      const comments = post._count?.comments ?? 0;
+      const views = post.viewsCount || 0;
+      score += Math.log10(likes + 1) * W.likesLog;
+      score += Math.log10(comments + 1) * W.commentsLog;
+      score += Math.log10(views + 1) * W.viewsLog;
+
       const catScore = interestMap.get(`category:${post.category}`) || 0;
       score += catScore * W.categoryInterest;
-
-      // Tag interests
       for (const tag of post.tags || []) {
-        const t = interestMap.get(`tag:${tag}`) || 0;
-        score += t * W.tagInterest;
+        score += (interestMap.get(`tag:${tag}`) || 0) * W.tagInterest;
       }
-
-      // Author role interest (MODEL, PHOTOGRAPHER, etc.)
       if (post.author?.role) {
-        const roleScore = interestMap.get(`role:${post.author.role}`) || 0;
-        score += roleScore * W.roleInterest;
+        score += (interestMap.get(`role:${post.author.role}`) || 0) * W.roleInterest;
       }
 
-      // Location interest
+      // ── Collaboration potential ──────────────────────────────────────
+      if (author?.availableForCollab &&
+          (!author.availableUntil || new Date(author.availableUntil).getTime() > now)) {
+        score += W.available;
+      }
+      const completeness = [
+        author?.avatarUrl,
+        author?.bio,
+        author?.rate,
+        author?.isVerified,
+        (author?._count?.portfolio || 0) > 0,
+        !!author?.location,
+      ].filter(Boolean).length;
+      score += completeness * W.profileComplete;
+      score += (dealSuccess.get(post.authorId) || 0) * W.dealSuccess;
+
+      // ── Local relevance ───────────────────────────────────────────────
+      if (viewerCity) {
+        const postCity = (post.location || '').split(',')[0].trim().toLowerCase();
+        const authorCity = (author?.location || '').split(',')[0].trim().toLowerCase();
+        if (postCity === viewerCity || authorCity === viewerCity) score += W.local;
+      }
       if (post.location) {
         const locKey = post.location.toLowerCase().split(',')[0].trim();
-        const locScore = interestMap.get(`location:${locKey}`) || 0;
-        score += locScore * W.locationInterest;
+        score += (interestMap.get(`location:${locKey}`) || 0) * W.locationInterest;
       }
 
-      // Following boost
-      if (followingSet.has(post.authorId)) {
-        score += W.followingAuthor;
-      }
+      if (followingSet.has(post.authorId)) score += W.followingAuthor;
 
-      // Engagement (log scale so viral posts don't dominate forever)
-      const likes = post.likesCount || 0;
-      score += Math.log10(likes + 1) * W.likesLog;
-
-      // Recency (stronger in first ~48h)
+      // Recency + light exploration
       const ageHours = (now - new Date(post.createdAt).getTime()) / (1000 * 60 * 60);
-      const recency = Math.max(0, 1 - ageHours / W.recencyHours);
-      score += recency * W.recencyBoost;
-
-      // Light exploration so users discover new niches
+      score += Math.max(0, 1 - ageHours / W.recencyHours) * W.recencyBoost;
       score += Math.random() * W.exploration;
 
       return { post, score };
