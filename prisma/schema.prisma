@@ -15,6 +15,11 @@ enum Role {
   ADMIN
 }
 
+enum LoginChannel {
+  EMAIL
+  SMS
+}
+
 enum DealStatus {
   PENDING
   ACCEPTED
@@ -68,6 +73,15 @@ model User {
   // Optional 2FA (brands/admins)
   twoFactorSecret  String?
   twoFactorEnabled Boolean  @default(false)
+
+  // Login verification: a one-time code is sent to email or phone after the
+  // password succeeds, before any JWT is issued.
+  phone            String?
+  phoneVerified    Boolean       @default(false)
+  loginOtpEnabled  Boolean       @default(false)
+  loginOtpChannel  LoginChannel  @default(EMAIL)
+  loginChallenges  LoginChallenge[]
+
 
   // Public key for E2EE chat (curve P-256 SPKI, base64). Public by design.
   publicKey String?
@@ -627,4 +641,22 @@ model NotificationRule {
 
   @@unique([userId, event, channel])
   @@map("notification_rules")
+}
+
+model LoginChallenge {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash    String
+  salt        String
+  channel     LoginChannel
+  destination String
+  attempts    Int          @default(0)
+  resends     Int          @default(0)
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime     @default(now())
+
+  @@index([userId])
+  @@map("login_challenges")
 }

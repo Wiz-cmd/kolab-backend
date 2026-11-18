@@ -16,9 +16,9 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
-import { IsEmail, IsString, MinLength, IsOptional, IsIn } from 'class-validator';
+import { IsEmail, IsString, MinLength, IsOptional, IsIn, IsBoolean, IsEnum, Matches } from 'class-validator';
 import { Request } from 'express';
-import { Role } from '@prisma/client';
+import { Role, LoginChannel } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { TwoFactorService } from './two-factor.service';
@@ -105,6 +105,33 @@ class VerifyEmailDto {
   token: string;
 }
 
+class VerifyLoginOtpDto {
+  @IsString()
+  challengeId: string;
+
+  @IsString()
+  @Matches(/^\d{6}$/)
+  code: string;
+}
+
+class ResendLoginOtpDto {
+  @IsString()
+  challengeId: string;
+}
+
+class LoginOtpSettingsDto {
+  @IsBoolean()
+  enabled: boolean;
+
+  @IsEnum(LoginChannel)
+  channel: LoginChannel;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\+?[0-9\s\-()]{7,20}$/)
+  phone?: string;
+}
+
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -141,6 +168,29 @@ export class AuthController {
       req.ip,
       req.headers['user-agent'],
     );
+  }
+
+  @ApiOperation({ summary: 'Complete login with the emailed/texted one-time code' })
+  @Post('login/verify')
+  @HttpCode(HttpStatus.OK)
+  verifyLoginOtp(@Body() dto: VerifyLoginOtpDto, @Req() req: Request) {
+    return this.authService.verifyLoginOtp(dto.challengeId, dto.code, req.ip, req.headers['user-agent']);
+  }
+
+  @ApiOperation({ summary: 'Resend the login one-time code' })
+  @Post('login/resend')
+  @HttpCode(HttpStatus.OK)
+  resendLoginOtp(@Body() dto: ResendLoginOtpDto) {
+    return this.authService.resendLoginOtp(dto.challengeId);
+  }
+
+  @ApiOperation({ summary: 'Enable or disable email/SMS login verification' })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Post('login/otp-settings')
+  @HttpCode(HttpStatus.OK)
+  setLoginOtp(@CurrentUser('id') userId: string, @Body() dto: LoginOtpSettingsDto) {
+    return this.authService.setLoginOtp(userId, dto.enabled, dto.channel, dto.phone);
   }
 
   @ApiOperation({ summary: 'Rotate an expired access token' })

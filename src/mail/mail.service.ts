@@ -78,6 +78,15 @@ export class MailService {
     });
   }
 
+  async sendLoginOtp(to: string, code: string) {
+    return this.send({
+      to,
+      subject: 'Your Kolab login code',
+      text: `Your Kolab login code is ${code}.\nIt expires in 10 minutes. Never share this code with anyone.`,
+      html: `<p>Your Kolab login code is <strong>${code}</strong>.</p><p>It expires in 10 minutes. Never share this code with anyone.</p>`,
+    });
+  }
+
   async sendEmailVerification(to: string, verifyUrl: string) {
     return this.send({
       to,

@@ -13,6 +13,7 @@ import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
+import { SmsService } from '../mail/sms.service';
 import { TwoFactorService } from './two-factor.service';
 
 jest.mock('bcryptjs', () => ({
@@ -33,7 +34,7 @@ const configMock = {
 
 describe('AuthService', () => {
   let service: AuthService;
-  let prisma: { user: any; refreshToken: any; passwordReset: any; $transaction: any };
+  let prisma: { user: any; refreshToken: any; passwordReset: any; loginChallenge: any; $transaction: any };
   let jwt: { sign: any };
 
   const baseUser = {
@@ -80,6 +81,11 @@ describe('AuthService', () => {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
       },
+      loginChallenge: {
+        create: jest.fn().mockImplementation(async ({ data }) => ({ id: 'lc1', ...data })),
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+      },
       $transaction: jest.fn(async (ops: any[]) => {
         for (const op of ops) await op;
         return ops;
@@ -91,6 +97,11 @@ describe('AuthService', () => {
     const mail = {
       sendPasswordReset: jest.fn().mockResolvedValue({ delivered: false }),
       sendEmailVerification: jest.fn().mockResolvedValue({ delivered: false }),
+      sendLoginOtp: jest.fn().mockResolvedValue({ delivered: false }),
+    };
+    const sms = {
+      mask: jest.fn((v: string) => '***'),
+      sendLoginOtp: jest.fn().mockResolvedValue({ delivered: false }),
     };
     const twoFactor = { verify: jest.fn().mockReturnValue(true) };
 
@@ -102,6 +113,7 @@ describe('AuthService', () => {
         { provide: ConfigService, useValue: configMock },
         { provide: NotificationsService, useValue: notifications },
         { provide: MailService, useValue: mail },
+        { provide: SmsService, useValue: sms },
         { provide: TwoFactorService, useValue: twoFactor },
       ],
     }).compile();
@@ -187,7 +199,7 @@ describe('AuthService', () => {
     prisma.user.findUnique.mockResolvedValue({ ...baseUser });
     prisma.refreshToken.upsert.mockResolvedValue({});
 
-    const result = await service.login('a@b.co', 'password');
+    const result: any = await service.login('a@b.co', 'password');
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBeDefined();
     expect(prisma.user.update).toHaveBeenCalledWith(
@@ -216,6 +228,57 @@ describe('AuthService', () => {
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBeDefined();
     expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('returns an OTP challenge instead of tokens when login verification is enabled', async () => {
+    prisma.user.findUnique.mockResolvedValue({ ...baseUser, loginOtpEnabled: true, loginOtpChannel: 'EMAIL' });
+    const result: any = await service.login('a@b.co', 'password123');
+    expect(result.challenge).toBe(true);
+    expect(result.accessToken).toBeUndefined();
+    expect(result.challengeId).toBe('lc1');
+    expect(result.devCode).toMatch(/^\d{6}$/);
+    expect(prisma.loginChallenge.create).toHaveBeenCalled();
+  });
+
+  it('issues tokens only after the correct login OTP', async () => {
+    const code = '123456';
+    const salt = 'salt';
+    prisma.loginChallenge.findUnique.mockResolvedValue({
+      id: 'lc1',
+      userId: 'u1',
+      codeHash: (service as any).hashOtp(code, salt),
+      salt,
+      channel: 'EMAIL',
+      destination: 'a@b.co',
+      attempts: 0,
+      resends: 0,
+      expiresAt: new Date(Date.now() + 60_000),
+      usedAt: null,
+    });
+    const result = await service.verifyLoginOtp('lc1', code);
+    expect(result.accessToken).toBe('access-token');
+    expect(prisma.loginChallenge.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ usedAt: expect.any(Date) }) }),
+    );
+  });
+
+  it('rejects a wrong login OTP and records the attempt', async () => {
+    prisma.loginChallenge.findUnique.mockResolvedValue({
+      id: 'lc1',
+      userId: 'u1',
+      codeHash: (service as any).hashOtp('111111', 'salt'),
+      salt: 'salt',
+      channel: 'EMAIL',
+      destination: 'a@b.co',
+      attempts: 0,
+      resends: 0,
+      expiresAt: new Date(Date.now() + 60_000),
+      usedAt: null,
+    });
+    await expect(service.verifyLoginOtp('lc1', '222222')).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.loginChallenge.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { attempts: { increment: 1 } } }),
+    );
   });
 
   it('rejects password reset with a used token', async () => {

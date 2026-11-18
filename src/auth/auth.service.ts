@@ -8,17 +8,21 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
+import { SmsService } from '../mail/sms.service';
 import { TwoFactorService } from './two-factor.service';
-import { Role } from '@prisma/client';
+import { Role, LoginChannel } from '@prisma/client';
 
 const MAX_FAILED_LOGINS = 10;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const LOGIN_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const LOGIN_OTP_MAX_ATTEMPTS = 5;
+const LOGIN_OTP_MAX_RESENDS = 3;
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -32,6 +36,7 @@ export class AuthService {
     private config: ConfigService,
     private notifications: NotificationsService,
     private mail: MailService,
+    private sms: SmsService,
     private twoFactor: TwoFactorService,
   ) {}
 
@@ -136,6 +141,12 @@ export class AuthService {
       }
     }
 
+    // Email/SMS login verification: issue a challenge instead of JWTs until
+    // the one-time code is confirmed. The password was already validated.
+    if (user.loginOtpEnabled) {
+      return this.createLoginChallenge(user, ip, userAgent);
+    }
+
     // Success: reset any lockout / failed counter.
     await this.prisma.user.update({
       where: { id: user.id },
@@ -158,6 +169,173 @@ export class AuthService {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
     };
+  }
+
+  /** Create + deliver a one-time login code. Never returns a JWT. */
+  private async createLoginChallenge(
+    user: { id: string; email: string; phone: string | null; loginOtpChannel: LoginChannel },
+    _ip?: string,
+    _userAgent?: string,
+  ) {
+    const channel = user.loginOtpChannel || LoginChannel.EMAIL;
+    const destination = channel === LoginChannel.SMS ? user.phone : user.email;
+    if (!destination) {
+      throw new BadRequestException(
+        channel === LoginChannel.SMS
+          ? 'No phone number is configured for SMS verification. Add one in Security.'
+          : 'No email is configured for verification.',
+      );
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const salt = randomBytes(16).toString('hex');
+    const codeHash = this.hashOtp(code, salt);
+    const challenge = await this.prisma.loginChallenge.create({
+      data: {
+        userId: user.id,
+        codeHash,
+        salt,
+        channel,
+        destination,
+        expiresAt: new Date(Date.now() + LOGIN_OTP_TTL_MS),
+      },
+    });
+
+    if (channel === LoginChannel.SMS) {
+      await this.sms.sendLoginOtp(destination, code);
+    } else {
+      await this.mail.sendLoginOtp(destination, code);
+    }
+
+    return {
+      challenge: true,
+      challengeId: challenge.id,
+      channel: channel.toLowerCase(),
+      destination: this.maskDestination(destination),
+      expiresIn: LOGIN_OTP_TTL_MS / 1000,
+      // Dev-only, gated by the same flag as password-reset/verification tokens.
+      devCode: this.devReturnTokens() ? code : undefined,
+    };
+  }
+
+  /** Verify a login OTP and only then issue the real token pair. */
+  async verifyLoginOtp(challengeId: string, code: string, ip?: string, userAgent?: string) {
+    const challenge = await this.prisma.loginChallenge.findUnique({ where: { id: challengeId } });
+    if (!challenge || challenge.usedAt) {
+      throw new UnauthorizedException('Invalid or expired login code');
+    }
+    if (challenge.expiresAt < new Date()) {
+      throw new UnauthorizedException('Login code has expired. Request a new one.');
+    }
+    if (challenge.attempts >= LOGIN_OTP_MAX_ATTEMPTS) {
+      throw new UnauthorizedException('Too many attempts. Request a new login code.');
+    }
+    if (!/^\d{6}$/.test(code) || this.hashOtp(code, challenge.salt) !== challenge.codeHash) {
+      await this.prisma.loginChallenge.update({
+        where: { id: challenge.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Incorrect login code');
+    }
+
+    await this.prisma.loginChallenge.update({
+      where: { id: challenge.id },
+      data: { usedAt: new Date() },
+    });
+
+    const user = await this.prisma.user.findUnique({ where: { id: challenge.userId } });
+    if (!user || user.isBanned) throw new UnauthorizedException('Account unavailable');
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { failedLoginAttempts: 0, lockedUntil: null },
+    });
+
+    const tokens = await this.issueTokens(user.id, ip, userAgent);
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        location: user.location,
+        avatarUrl: user.avatarUrl,
+        isVerified: user.isVerified,
+        isEmailVerified: user.isEmailVerified,
+      },
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+
+  /** Resend a fresh code for an existing, unused challenge (rate-limited). */
+  async resendLoginOtp(challengeId: string) {
+    const challenge = await this.prisma.loginChallenge.findUnique({ where: { id: challengeId } });
+    if (!challenge || challenge.usedAt) throw new UnauthorizedException('Invalid login challenge');
+    if (challenge.expiresAt < new Date()) throw new UnauthorizedException('Login code has expired');
+    if (challenge.resends >= LOGIN_OTP_MAX_RESENDS) {
+      throw new BadRequestException('Too many resends. Start a new sign-in.');
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const salt = randomBytes(16).toString('hex');
+    await this.prisma.loginChallenge.update({
+      where: { id: challenge.id },
+      data: {
+        codeHash: this.hashOtp(code, salt),
+        salt,
+        attempts: 0,
+        resends: { increment: 1 },
+        expiresAt: new Date(Date.now() + LOGIN_OTP_TTL_MS),
+      },
+    });
+
+    if (challenge.channel === LoginChannel.SMS) {
+      await this.sms.sendLoginOtp(challenge.destination, code);
+    } else {
+      await this.mail.sendLoginOtp(challenge.destination, code);
+    }
+    return { success: true, expiresIn: LOGIN_OTP_TTL_MS / 1000, devCode: this.devReturnTokens() ? code : undefined };
+  }
+
+  /** User-controlled login verification settings. */
+  async setLoginOtp(
+    userId: string,
+    enabled: boolean,
+    channel: LoginChannel,
+    phone?: string,
+  ) {
+    if (enabled && channel === LoginChannel.SMS && !phone?.trim()) {
+      throw new BadRequestException('A phone number is required for SMS verification');
+    }
+    const normalizedPhone = phone?.replace(/[^\d+]/g, '') || null;
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        loginOtpEnabled: enabled,
+        loginOtpChannel: channel,
+        phone: normalizedPhone,
+        phoneVerified: false,
+      },
+      select: {
+        loginOtpEnabled: true,
+        loginOtpChannel: true,
+        phone: true,
+        phoneVerified: true,
+      },
+    });
+  }
+
+  private hashOtp(code: string, salt: string): string {
+    return createHash('sha256').update(salt + ':' + code).digest('hex');
+  }
+
+  private maskDestination(value: string): string {
+    if (value.includes('@')) {
+      const [name, domain] = value.split('@');
+      return `${name.slice(0, 2)}***@${domain}`;
+    }
+    return this.sms.mask(value);
   }
 
   /**

@@ -65,6 +65,15 @@ services:
         sync: false
       - key: X_CLIENT_SECRET
         sync: false
+      # SMS login codes (optional). Email codes use the SMTP settings.
+      - key: SMS_DRIVER
+        value: log
+      - key: SMS_TWILIO_ACCOUNT_SID
+        sync: false
+      - key: SMS_TWILIO_AUTH_TOKEN
+        sync: false
+      - key: SMS_FROM_NUMBER
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       # Set this in the Render dashboard (Environment tab) to your Neon
