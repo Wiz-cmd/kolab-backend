@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 type Challenge = {
@@ -17,8 +17,6 @@ const THEMES: Challenge[] = [
 
 @Injectable()
 export class ChallengesService {
-  private readonly logger = new Logger(ChallengesService.name);
-
   constructor(private prisma: PrismaService) {}
 
   /** Deterministic weekly challenge — same for everyone, rotates every ISO week. */
